@@ -1,74 +1,127 @@
 #include <stdlib.h>
-#include <math.h>
 #include "TXLib.h"
+#include <xmmintrin.h>
+#include <immintrin.h>
 
-const int SIZE_X 			= 1000;
-const int SIZE_Y 			= 1000;
-
-const double scale			= 0.01;
-
+const int SIZE_X 			= 800;
+const int SIZE_Y 			= 800;
+const __m256 scale			= {1./400, 1./400, 1./400, 1./400};
 const size_t infiniteNum 	= 256;
+const __m256 radius			= {4, 4, 4, 4};
 
-const double radius			= 2;
+int deltaX					= 0;
+int dx						= 10;
 
-size_t CountLungeNum (double x, double y);
+int deltaY					= 0;
+int dy						= 10;
 
-int main () {
+const size_t mSize			= 8;
+const float  eps			= 0.00001;
 
+__m256 CountLungeNum (__m256 x, __m256 y);
 
-	txCreateWindow (SIZE_X, SIZE_Y);
+inline bool mm_eq (__m256 a) {
 
-	txLock ();
+	bool res = true;
 
-	RGBQUAD* videoMem = txVideoMemory ();
-	
-	for (int y = 1; y < SIZE_Y; y++) {
+	for (int i = 0; i < mSize; i++) {
 
-		for (int x = 1; x < SIZE_X; x++) {
+		if ( a [i] > eps ) {
 
-			size_t numLunge = CountLungeNum ((double)x - (double)SIZE_X / 2.0, (-1.0) * ( (double)y - (double)SIZE_Y / 2.0 ));
+			res = false;
+			break;
 
-			RGBQUAD color = numLunge == infiniteNum ? 	(RGBQUAD) {(BYTE)(0),(BYTE)(0),(BYTE)(0)} : 
-														(RGBQUAD) {(BYTE)(255),(BYTE)(255),(BYTE)(255)};
-			*(videoMem + x + (SIZE_Y - y) * SIZE_X) = color;
-
-		}
+		} 
 
 	}
 
-	txUnlock ();
+	return res;
+
+}
+
+int main () {
+
+	txCreateWindow (SIZE_X, SIZE_Y);
+
+	txBegin ();
+
+	RGBQUAD* videoMem = txVideoMemory ();
+
+	while (!GetAsyncKeyState(VK_ESCAPE)) {
+
+		if (GetAsyncKeyState (VK_RIGHT)) deltaX += dx;
+		if (GetAsyncKeyState (VK_LEFT))  deltaX -= dx;
+		if (GetAsyncKeyState (VK_UP)) 	 deltaY += dy;
+		if (GetAsyncKeyState (VK_DOWN))  deltaY -= dy;
+
+		for (int y = 1; y < SIZE_Y; y++) {
+
+			for (int x = 1; x < SIZE_X; x += mSize) {	
+				
+				__m256 X = {};
+				for (size_t i = 0; i < mSize; i++) X [i] = (float)x + (float)i - (float)SIZE_X / 2.0 + (float) deltaX;
+				__m256 Y = {};
+				for (size_t i = 0; i < mSize; i++) Y [i] = (float)SIZE_Y / 2.0 - (float)y + deltaY;
+
+				__m256 numLunge = CountLungeNum (X, Y);
+				for (int i = 0; i < mSize; i++) {
+
+					RGBQUAD color = numLunge [i] < infiniteNum ? (RGBQUAD) {(BYTE)(255), (BYTE)(255), (BYTE)(255)} :
+																 (RGBQUAD) {};
+
+					if ((x + i) + (SIZE_Y - y) * SIZE_X >= 640000)
+						break;
+
+					if ((x + i) >= SIZE_X)
+						break;	
+
+					*(videoMem + (x + i) + (SIZE_Y - y) * SIZE_X) = color;											 	
+
+				}
+
+			}
+
+		}
+
+		printf ("%lg\n", txGetFPS ());
+		txSleep ();
+
+	}
+
+	txEnd ();
 
 	return 0;
 
 }
 
-size_t CountLungeNum (double x, double y) {
+__m256 CountLungeNum (__m256 x, __m256 y) {
 
-	size_t toCountLunge = 0;
+	__m256 nextX = _mm256_mul_ps  (x, scale);
+	__m256 nextY = _mm256_mul_ps  (y, scale);
 
-	double nextX = x * scale;
-	double nextY = x * scale;
+	x = _mm256_mul_ps (x, scale);
+	y = _mm256_mul_ps (y, scale);
 
-	const double x_0   = x * scale;
-	const double y_0   = y * scale;
- 
-	double tempX = 0;
+	__m256 addit 		= {1, 1, 1, 1, 1, 1, 1, 1};
+	__m256 toCountLunge = {0, 0, 0, 0, 0, 0, 0, 0}; 
 
-	while (toCountLunge != infiniteNum) {
+	for (int j = 0; j < 256; j++) {
 
-		double rho = nextX * nextX + nextY * nextY;
+		__m256 x2    = _mm256_mul_ps   (nextX, nextX);
+		__m256 y2    = _mm256_mul_ps   (nextY, nextY);
+		__m256 xy    = _mm256_mul_ps   (nextX, nextY);
+		__m256 rho   = _mm256_add_ps   (x2, y2);
 
-		if ( rho > radius * radius ) {
+		__m256 cmpr  = _mm256_cmp_ps   (rho, radius, _CMP_LE_OS);
+		addit 		 = _mm256_and_ps   (addit, cmpr);
 
-			return toCountLunge;
+		toCountLunge = _mm256_add_ps   (addit, toCountLunge);
 
-		}
+		if (mm_eq (addit)) 
+			break;
 
-		tempX = nextX * nextX - nextY * nextY + x_0;
-		nextY = 2. * nextX * nextY + y_0;
-		nextX = tempX;
-
-		toCountLunge++;
+		nextX = _mm256_add_ps (_mm256_add_ps (x, _mm256_sub_ps (x2, y2)), addit);
+		nextY = _mm256_add_ps (_mm256_add_ps (_mm256_add_ps (xy, xy), y), addit);
 
 	}
 
